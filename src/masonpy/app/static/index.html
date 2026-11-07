@@ -1,0 +1,328 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>
+      MasonPy Workbench
+    </title>
+    <link rel="stylesheet" href="/style.css">
+
+    <!-- Pinned browser dependencies; no bundler, npm or unconditional CDN request. -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.180.0/examples/jsm/"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <h1>
+            MasonPy Workbench
+          </h1>
+        </div>
+        <nav role="tablist" id="stage-tabs" aria-label="Workbench stages">
+          <button type="button" role="tab" id="stage-wall" aria-selected="true" aria-controls="stage-workspace">Wall</button>
+          <span aria-hidden="true">→</span>
+          <button type="button" role="tab" id="stage-shape" aria-selected="false" tabindex="-1" aria-controls="stage-workspace">Shape</button>
+          <span aria-hidden="true">→</span>
+          <button type="button" role="tab" id="stage-3d" aria-selected="false" tabindex="-1" aria-controls="stage-workspace">3D</button>
+        </nav>
+        <div id="wall-library" aria-label="Saved walls">
+          <select id="wall-history" aria-label="Wall history" title="Restore an exact wall from this session"><option value="">Session history</option></select>
+          <button type="button" id="load-wall" title="Load wall geometry and generator parameters from JSON">Load</button>
+          <button type="button" id="save-wall" title="Save applied wall geometry, generator parameters and evidence as JSON">Save</button>
+          <input id="wall-file" type="file" accept=".json,application/json" hidden aria-label="Wall JSON file">
+        </div>
+      </header>
+
+      <!-- Generator configuration: drafts stay separate from the displayed wall. -->
+      <details id="parameter-panel" open>
+        <summary>
+          Parameters
+          <span id="parameter-summary">
+          </span>
+          <label id="advanced-toggle" class="advanced-toggle"><input id="show-advanced" type="checkbox">Advanced</label>
+        </summary>
+
+        <!-- Generator-specific inputs and bounds are supplied by the Python catalogue. -->
+        <form id="toolbar">
+          <label>
+            Generator
+            <select id="generator">
+            </select>
+          </label>
+          <label>
+            Wall width
+            <input
+              id="width"
+              type="number"
+              min="1"
+              value="104"
+            >
+          </label>
+          <label>
+            Wall height
+            <input
+              id="height"
+              type="number"
+              min="1"
+              value="60"
+            >
+          </label>
+
+          <!-- Ordinary parameters are rendered here by ParameterPanel. -->
+          <div id="generator-parameters">
+          </div>
+
+          <!-- Advanced schema fields use the same input/validation path. -->
+          <div id="advanced-controls" hidden>
+            <div id="advanced-parameters"></div>
+          </div>
+          <output id="sync-note" for="generator width height generator-parameters" hidden>
+            Parameters changed — apply & reset to update the wall.
+          </output>
+        </form>
+        <form id="shape-controls" hidden aria-label="Shape parameters">
+          <label>Joint width<input id="joint-width" type="number" min="0" step="any" value="0.2" required></label>
+          <label title="Fractional shared movement; zero preserves rectangular stones. Movement is bounded by local stone size.">
+            Distortion
+            <span class="range-control"><input id="shape-distortion" type="range" min="0" max="1" step="0.01" value="0"><output id="distortion-value">0</output></span>
+          </label>
+          <div id="shape-advanced" hidden>
+            <label>Seed<input id="shape-seed" type="number" min="0" max="2147483647" step="1" value="1" required></label>
+            <label title="Length in grid units over which nearby corners move similarly. Larger values produce broader variation.">Variation scale<input id="variation-scale" type="number" min="0.25" step="any" value="6" required></label>
+          </div>
+          <p class="parameter-help">Shared distortion is applied before mortar inset.</p>
+        </form>
+          <form id="three-controls" aria-label="3D parameters" hidden>
+            <label>
+              Mapping
+              <select id="projection-mode">
+                <option value="flat">
+                  Flat wall
+                </option>
+                <option value="projected" selected>
+                  Projected column
+                </option>
+              </select>
+            </label>
+            <label title="0: square; 1: faceted cylinder">
+              Roundness
+              <span class="range-control"><input
+                id="projection-roundness"
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value="0.25"
+              >
+              <output id="roundness-value">
+                0.25
+              </output></span>
+            </label>
+            <label>
+              Faces per corner
+              <input
+                id="projection-resolution"
+                type="number"
+                min="1"
+                max="64"
+                step="1"
+                value="8"
+              >
+            </label>
+            <label>
+              Stone depth
+              <span class="range-control"><input
+                id="stone-depth"
+                type="range"
+                min="0"
+                max="2"
+                step="0.05"
+                value="0.25"
+              >
+              <output id="depth-value">
+                0.25
+              </output></span>
+            </label>
+
+            <div id="build-advanced" class="stage-advanced" hidden>
+              <div class="stage-fields">
+            <label>
+              Core
+              <select id="projection-primitive">
+                <option value="none">
+                  None
+                </option>
+                <option value="solid">
+                  Solid core
+                </option>
+                <option value="tube" selected>
+                  Tube
+                </option>
+              </select>
+            </label>
+            <label title="Minimum separation to a similar scaled inner cross-section">
+              Tube thickness
+              <input
+                id="tube-thickness"
+                type="number"
+                min="0.01"
+                step="any"
+                value="1"
+              >
+            </label>
+              </div>
+            </div>
+          </form>
+      </details>
+
+      <!-- Logic on the left, result feedback in the middle, replay/export on the right. -->
+      <div class="actions" id="stage-actions">
+        <div class="logic-actions">
+          <div id="wall-actions" class="action-group">
+            <div class="action-segment">
+              <button type="submit" form="toolbar" id="reset">Reset</button>
+            </div>
+            <div class="action-segment">
+              <button type="button" id="undo">Undo last</button>
+              <button type="button" id="step">Place one</button>
+              <button type="button" id="generate">Generate wall</button>
+            </div>
+          </div>
+          <div id="shape-actions" class="action-group" hidden>
+            <div class="action-segment">
+              <button type="button" id="shape-reset">Default settings</button>
+              <button type="submit" form="shape-controls" id="apply-shape">Apply Shape</button>
+            </div>
+            <label class="live-toggle"><input id="live-shape" type="checkbox" checked>Live</label>
+          </div>
+          <div id="build-actions" class="action-group" hidden>
+            <button type="submit" form="three-controls" id="build-3d">Build 3D</button>
+            <label class="live-toggle"><input id="live-3d" type="checkbox" checked>Live</label>
+          </div>
+        </div>
+        <p id="stage-feedback" role="status" aria-live="polite"></p>
+        <div class="utility-actions">
+          <div class="action-segment playback-actions">
+            <button type="button" id="play-reverse" title="Replay existing stones in reverse" aria-label="Replay existing stones in reverse">◀</button>
+            <button type="button" id="play-forward" title="Replay existing stones" aria-label="Replay existing stones">▶</button>
+          </div>
+          <div class="action-segment export-actions">
+            <label class="export-scale" title="Physical export size: millimetres per grid unit">
+              <input id="export-scale" type="number" min="0.000001" step="any" value="1" required aria-label="Millimetres per grid unit">mm/unit
+            </label>
+            <button type="button" id="export-stage">Export SVG</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Workspace: independent viewer and Events/Info components. -->
+      <section class="workspace" id="stage-workspace" role="tabpanel" aria-labelledby="stage-wall">
+        <div class="drawing-panel">
+          <div class="panel-heading"><span id="viewer-title">Wall · discrete construction</span></div>
+
+          <!-- 2D SVG scene: logical coordinates, split display pieces and measurement guides. -->
+          <div id="canvas-wrap">
+            <svg id="wall" role="img" aria-label="Generated masonry wall">
+            </svg>
+          </div>
+
+          <!-- Stored 3D builds use a lazy renderer; the two SVG stages work offline. -->
+          <div id="three-wrap" aria-label="3D wall viewer" hidden>
+            <p id="three-status" role="status">
+            </p>
+          </div>
+
+          <!-- 2D navigation and optional read-only diagnostic overlays. -->
+          <div id="wall-controls" aria-label="Wall view controls">
+            <button type="button" id="zoom-out" title="Zoom out" aria-label="Zoom out">
+              −
+            </button>
+            <button type="button" id="fit-view">
+              Fit
+            </button>
+            <button type="button" id="zoom-in" title="Zoom in" aria-label="Zoom in">
+              +
+            </button>
+            <button type="button" id="wrap-toggle" aria-pressed="false">
+              Wrapping: off
+            </button>
+            <label class="diagnostic-control">
+              <input
+                type="checkbox"
+                id="show-seams"
+              >
+              Seams
+            </label>
+            <label class="diagnostic-control">
+              <input
+                type="checkbox"
+                id="show-horizontal-joints"
+              >
+              Horizontal joints
+            </label>
+            <label class="diagnostic-control">
+              <input
+                type="checkbox"
+                id="logical-wrap"
+              >
+              Logical wrap
+            </label>
+            <button type="button" id="report-seams">
+              Report seams
+            </button>
+            <label class="diagnostic-control">
+              <input
+                type="checkbox"
+                id="hide-snecks"
+              >
+              Hide snecks
+            </label>
+            <label class="diagnostic-control"><input type="checkbox" id="analysis-colours">Analysis colours</label>
+            <span id="analysis-legend" hidden><i class="ordinary"></i>Ordinary <i class="fallback"></i>Fallback <i class="deliberate"></i>Deliberate snecks</span>
+            <span id="seam-summary" aria-live="polite">
+            </span>
+          </div>
+
+          <!-- Presentation-only controls; Python validates these limits again. -->
+          <div id="three-navigation" hidden><button type="button" id="three-fit">Fit</button></div>
+        </div>
+
+        <!-- Shared logical selection drives both event expansion and local analytics. -->
+        <aside>
+          <section id="wall-analysis" hidden aria-label="Wall analysis">
+            <p class="analysis-heading">Full wall analysis</p>
+            <dl id="analysis-metrics"></dl>
+          </section>
+          <div class="panel-heading">
+            <div role="tablist" aria-label="Wall inspector">
+              <button type="button" role="tab" id="events-tab" aria-controls="events" aria-selected="true">
+                events
+              </button>
+              <button type="button" role="tab" id="info-tab" aria-controls="info" aria-selected="false" tabindex="-1">
+                info
+              </button>
+            </div>
+            <span id="event-count">
+              0 placements
+            </span>
+          </div>
+          <ol id="events" role="tabpanel" aria-labelledby="events-tab">
+          </ol>
+          <div id="info" role="tabpanel" aria-labelledby="info-tab" hidden>
+          </div>
+        </aside>
+      </section>
+    </main>
+    <!-- Module startup composes the workbench; Three.js is still loaded lazily. -->
+    <script type="module" src="/startup.js">
+    </script>
+  </body>
+</html>
