@@ -7,6 +7,7 @@ from masonpy.models import Wall
 from .field import distort_boundaries
 from .inset import inset_stone
 from .models import ShapeSettings, ShapedStone, ShapedWall, WallDescription
+from .softening import soften_wall
 from .topology import BoundaryTopology, build_topology, description_signature
 from .validation import clipper, validate_arrangement
 
@@ -18,15 +19,18 @@ def shape_wall(
     distortion: float = 0.0,
     seed: int = 1,
     variation_scale: float = 6.0,
+    corner_softening: float = 0.0,
     topology: BoundaryTopology | None = None,
 ) -> ShapedWall:
     """Derive fractional contours from a logical source, committing nothing upstream.
 
-    Distortion zero uses the original rectangle arithmetic exactly. Otherwise,
+    Distortion and softening zero retain the original rectangle arithmetic. Otherwise,
     shared T-junctions are displaced once, validated periodically, then inset.
     Consumed/split stones or overlaps reject the whole proposed result.
     """
-    settings = ShapeSettings(joint_width, distortion, seed, variation_scale)
+    settings = ShapeSettings(
+        joint_width, distortion, seed, variation_scale, corner_softening
+    )
     source = WallDescription.from_wall(wall) if isinstance(wall, Wall) else wall
     if not source.stones:
         raise ValueError(
@@ -46,7 +50,7 @@ def shape_wall(
             stones.append(
                 ShapedStone(stone.id, ((x0, y0), (x1, y0), (x1, y1), (x0, y1)))
             )
-        return ShapedWall(source, stones=tuple(stones), settings=settings)
+        return soften_wall(ShapedWall(source, stones=tuple(stones), settings=settings))
     if topology is None:
         topology = build_topology(source)
     elif topology.signature != description_signature(source):
@@ -60,4 +64,6 @@ def shape_wall(
             validate_arrangement(stones, source.width, source.wrap_x)
     except lib.ClipperException as error:
         raise ValueError(f"Polygon processing failed: {error}") from error
-    return ShapedWall(source, stones=stones, settings=settings, statistics=statistics)
+    return soften_wall(
+        ShapedWall(source, stones=stones, settings=settings, statistics=statistics)
+    )

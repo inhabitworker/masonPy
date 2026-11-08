@@ -19,10 +19,16 @@ class ShapeSettings:
     distortion: float = 0.0
     seed: int = 1
     variation_scale: float = 6.0
+    corner_softening: float = 0.0
 
     def __post_init__(self) -> None:
         """Reject invalid drafts before constructing topology or changing any applied result."""
-        for name in ("joint_width", "distortion", "variation_scale"):
+        for name in (
+            "joint_width",
+            "distortion",
+            "variation_scale",
+            "corner_softening",
+        ):
             value = getattr(self, name)
             if (
                 isinstance(value, bool)
@@ -35,6 +41,8 @@ class ShapeSettings:
             raise ValueError("joint width must be non-negative")
         if not 0 <= self.distortion <= 1:
             raise ValueError("distortion must be between 0 and 1")
+        if not 0 <= self.corner_softening <= 1:
+            raise ValueError("corner softening must be between 0 and 1")
         if self.variation_scale < 0.25:
             raise ValueError("variation scale must be at least 0.25 grid units")
         if (
@@ -57,6 +65,10 @@ class ShapeStatistics:
     inserted_vertices: int = 0
     max_displacement: float = 0.0
     coordinate_precision: float = 1e-7
+    softened_stones: int = 0
+    softening_reduced: int = 0
+    softening_skipped: int = 0
+    max_softening_radius: float = 0.0
 
     def to_dict(self) -> dict[str, Any]:
         """Expose vertex counts and maximum pre-inset shared movement in grid units."""
@@ -124,6 +136,7 @@ class ShapedWall:
     stones: tuple[ShapedStone, ...]
     settings: ShapeSettings
     statistics: ShapeStatistics
+    unsoftened_stones: tuple[ShapedStone, ...] | None
 
     def __init__(
         self,
@@ -133,6 +146,7 @@ class ShapedWall:
         *,
         settings: ShapeSettings | None = None,
         statistics: ShapeStatistics | None = None,
+        unsoftened_stones: tuple[ShapedStone, ...] | None = None,
     ) -> None:
         """Capture an applied result while preserving the original constructor contract."""
         if settings is None:
@@ -145,6 +159,7 @@ class ShapedWall:
         object.__setattr__(self, "stones", tuple(stones))
         object.__setattr__(self, "settings", settings)
         object.__setattr__(self, "statistics", statistics or ShapeStatistics())
+        object.__setattr__(self, "unsoftened_stones", unsoftened_stones)
 
     @property
     def joint_width(self) -> float:
@@ -153,7 +168,7 @@ class ShapedWall:
 
     def to_dict(self) -> dict[str, Any]:
         """Expose inherited source, reproducible settings and renderer-independent contours."""
-        return {
+        result = {
             "source": self.source.to_dict(),
             "joint_width": self.joint_width,
             "method": "shared-warp-v1",
@@ -161,3 +176,8 @@ class ShapedWall:
             "statistics": self.statistics.to_dict(),
             "stones": [stone.to_dict() for stone in self.stones],
         }
+        if self.unsoftened_stones is not None:
+            result["unsoftened_stones"] = [
+                stone.to_dict() for stone in self.unsoftened_stones
+            ]
+        return result

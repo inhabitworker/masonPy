@@ -72,9 +72,7 @@ class MasonPyRequestHandler(BaseHTTPRequestHandler):
         try:
             if path == "/api/save":
                 data = self._read_json()
-                content, filename = self.session.save_record(
-                    revision=data.get("revision")
-                )
+                content, filename = self.session.export_config(data.get("config"))
                 self._send_bytes(content, "application/json", filename=filename)
                 return
             if path == "/api/export":
@@ -146,7 +144,7 @@ class MasonPyRequestHandler(BaseHTTPRequestHandler):
                         generator_parameters=data.get("parameters"),
                     )
                 elif path == "/api/load":
-                    self.session.load_record(
+                    self.session.load_config(
                         data.get("record"), source_revision=data.get("source_revision")
                     )
                 elif path == "/api/history":
@@ -160,6 +158,7 @@ class MasonPyRequestHandler(BaseHTTPRequestHandler):
                         distortion=data.get("distortion", 0),
                         seed=data.get("seed", 1),
                         variation_scale=data.get("variation_scale", 6),
+                        corner_softening=data.get("corner_softening", 0),
                         source_revision=data.get("source_revision"),
                     )
                 elif path == "/api/build":

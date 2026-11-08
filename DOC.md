@@ -245,8 +245,29 @@ offset vertices are cleaned within 2e-7 units. Consumed or split stones are
 explicit errors. The final arrangement is validated again. `shape_wall()` in
 `processing/shape.py` orchestrates the pipeline; at Distortion zero it bypasses
 all of this and retains the original rectangle-inset arithmetic exactly.
-Pyclipper is lazy-loaded only for distorted processing, not for core imports,
-generation, or zero-distortion shape applications.
+Pyclipper is lazy-loaded for distortion or corner softening, not for core imports,
+generation, or Shape applications with both effects zero.
+
+`processing/softening.py` optionally cuts convex corners after mortar inset, using
+short quadratic transitions with five samples per treated corner. The nominal
+radius is `corner_softening * short_bounding_span / 4`; tangent trim lengths are
+limited to 40% of adjoining edges. Concave junctions and turns below approximately
+three degrees remain unchanged. Samples end at curve parameters 0.01/0.99 rather
+than precisely on the original edges, keeping quantized chords inside the source
+with a straight-edge retreat of at most 0.0001 times the local trim.
+
+Each candidate must remain simple, contained in the unsoftened contour, and
+triangulatable by the downstream mapper. Failures halve the radius, with at most
+seven attempts, then retain the exact unsoftened stone. Very small radii and
+full-ring stones also stay unchanged. No fragments are chosen or stones dropped.
+The complete periodic arrangement is validated again. This is corner wear, not
+a global smoothing/subdivision operation or an exact circular fillet solver.
+The earlier inset/expand prototype was replaced because integer-clipped joins
+could introduce microscopic ears that fail 3D triangulation or float32 STL.
+`ShapedWall.unsoftened_stones` retains pre-softening profiles when the option is
+active. Statistics record softened/reduced/skipped counts and maximum nominal
+radius, alongside the existing distortion diagnostics. Zero remains an exact
+geometry bypass; the original positional ShapeSettings arguments remain valid.
 
 `processing/contours.py` supplies ear triangulation and vertical clipping for
 simple polygons. Ear selection favours well-conditioned triangles and checks the
@@ -266,6 +287,47 @@ Only faces whose stored vertices become identical are omitted; the complete
 remaining shell must still pass oriented edge-incidence and positive-volume
 checks. Collinear noncollapsed faces and open/nonmanifold results remain errors.
 No boolean union or general Blender modifier behaviour is implied.
+
+## Extrusion variation and exposed chamfers
+
+`WallGeometry` accepts `depth_variation` (0–0.9), `detail_seed` (integer) and
+`bevel` (non-negative width). Both effects default to zero and bypass their
+construction/validation path, preserving existing buffers. A BLAKE2b hash of
+the detail seed and logical stone ID produces one signed sample; extrusion is
+`depth * (1 + depth_variation * sample)`. Generation/Shape RNG state and placement
+order are never consulted. Rear surfaces and the core remain unchanged.
+
+`geometry/bevel.py` builds a single exposed chamfer from corresponding outer and
+inset vertices. Inward edge-normal intersections provide the inset, with a miter
+limit, positive band triangles, simple-path/containment checks and front-cap
+triangulation. Width is capped at 45% of actual depth and 20% of the contour's
+short bounding span; at most six halved candidates are tested. Front, rear, skirt
+and band triangles are clipped in `(source x, source y, extrusion depth)` before
+mapping, so cuts interpolate depth as well as position. Outlines follow the
+outer shoulder; no triangulation lines or separate per-band render objects are
+added. Projected full-ring stones skip bevels because their unwrapped ends are
+artificial seams.
+
+Each candidate must pass the exporter's oriented closed-shell and float32
+positive-volume checks at unit scale. Unusable bevels retain the complete
+unbeveled extrusion and report their IDs/reasons. A varied-depth precision failure
+may use base depth, also reported. Failure of the base geometry/shell rejects the
+whole build; no stone omission policy is introduced. These checks and inset-band
+constraints are not a general 3D self/intersection solver. Export repeats checks
+at the actual requested scale.
+
+Per-stone treatments include actual `depth`, effective `bevel`, reduction/skip
+flags, depth fallback and a bevel note. Build statistics summarize depth range,
+bevel count, reduced/skipped/depth-fallback IDs and zero omitted stones. They are
+available in state, stage Events and selected-stone Info. Source and Shape data
+remain immutable; source guards and retained-result behaviour still apply.
+
+Variable-depth mapping evaluates cached unit offset directions instead of
+caching an entire cross-section per depth. Only base/unit sections are retained.
+Work limits are 256 contour vertices per bevel, 12,000 triangles per chamfer and
+one million stone triangles per active detail build. Budget failure does not
+commit partial geometry. The renderer still uses one mesh plus one outline per
+stone. Density and JSON transfer remain considerations for very large walls.
 
 ## Workbench composition
 
@@ -303,34 +365,39 @@ size/sneck/joint violations independently of completion. Failed accepted prefixe
 remain valid diagnostic outcomes. Reports include shared colour roles and an
 English summary. Workbench caches by source revision and terminal outcome;
 playback and processing parameters do not recalculate the report.
-Gallery examples include standalone `.wall.json` attachments with geometry,
-recipe, outcome and RNG state; original placement evidence is omitted explicitly.
+Gallery examples include compact `.config.json` parameter recipes, loadable in
+the workbench for explicit regeneration. The full batch JSON retains measured
+geometry and outcomes.
 The gallery uses the same colour roles as the viewer. Batch metadata fingerprints
 generator and analysis code separately.
 
-`records.py` stores isolated `WallRecord` snapshots with exact source geometry,
-resolved generator recipe, available events, terminal state and standard-library
-random state expressed as JSON arrays (no pickle or executable input). Loading
-checks finite JSON data, integer coordinates, model placement/overlap rules,
-recipe validity, completion consistency and event/geometry correspondence before
-committing. Old stock outside today's policy is reported, not rewritten. Absent
-placement evidence receives explicitly marked placeholders. Original measured
-analysis is exported for inspection; imports recompute measurements from geometry.
-There is no file-format version or migration layer. Input limits are 32 MiB and
-four million occupancy cells.
+`records.py` stores isolated `WallRecord` snapshots for exact in-memory history,
+including source geometry, events, terminal state and available continuation RNG.
+The active entry is live; snapshots are copied on departure rather than on each
+placement. History begins with the first attempted placement, including preflight
+failure. Repeated Generate updates one entry. Reset/config loading archives the
+old entry without adding an empty one. Selecting a record restores exact geometry
+and the generator/RNG without replaying generation, and advances the Wall revision.
+Downstream settings remain session-global; history is shared by browser clients
+of the same server.
 
-History entries begin with the first attempted placement, including preflight
-failure. The active entry remains live; snapshots are copied only when saving or
-departing, avoiding per-placement copies of the entire specimen. Repeated Generate
-updates one entry. Reset archives the old entry without adding an empty one.
-Selecting/importing commits a fresh Wall revision and restores the generator/RNG
-without replaying generation. Partial continuation is reproducible with the same
-algorithm and saved RNG; future generator changes may produce a different continuation.
-History is server-session memory shared by its browser clients. Downstream
-settings/results remain session-global and become stale on source replacement.
-POST `/api/save` returns JSON with an attachment filename and optional `revision`
-guard. POST `/api/load` takes `record`; `/api/history` takes `record_id`. Both may
-include expected `source_revision`. Mutation/state responses remain atomic.
+`app/configuration.py` validates compact parameter-only recipes for Load/Export
+config. The recipe has `generator`, `width`, `height`, `parameters`, optional
+`shape`, and optional `build`; omitted downstream values use workbench defaults.
+Legacy full specimens are accepted only as parameter sources. All configuration
+fields are validated before reset. Geometry-dependent Shape/3D feasibility is
+still checked when applying/building, so a troublesome Wall configuration can be
+loaded without first producing a valid mesh. Loading clears computed downstream
+results and restores their default settings from the config. The browser returns
+to Wall for explicit generation; Live-off navigation also uses the imported
+settings. The file contains no events, occupancy, analysis or RNG state.
+
+POST `/api/save` takes optional `config` and returns normalized parameter JSON.
+The browser supplies current form drafts; exporting does not apply them. With no
+payload it exports applied/default backend parameters. POST `/api/load` accepts
+this recipe as `record`, plus optional `source_revision`; `/api/history` takes
+`record_id` and optional `source_revision`. Mutation responses are atomic.
+Input limits remain 32 MiB and four million cells, without schema versions.
 
 `exporting.py` provides clean SVG and validated binary STL without app imports.
 SVG keeps stone groups/IDs, flips logical Y for the document, and wraps/clips
@@ -353,12 +420,13 @@ without a separate disclosure or full-width subsection; hiding them preserves
 draft values.
 Shape uses it for its independent Seed and Variation scale.
 `parameters.js` retains generation drafts and explicit Apply & reset.
-`library.js` owns header Load/Save/history controls and JSON file selection.
-Successful restoration explicitly restores Wall form values, leaves downstream
-drafts intact, and invokes the existing stage-refresh coordinator. Invalid loads
-preserve active geometry, history and drafts. State responses carry lightweight
-history labels rather than every saved wall. Save and SVG/STL share attachment
-download handling but remain distinct source and geometry exports.
+`library.js` owns header Load config/Export config/history and file selection.
+Config loading restores Wall, Shape and 3D controls, clears stale computed output
+and selects Wall without generation. History restoration leaves downstream drafts
+intact and invokes the existing refresh coordinator. Invalid loads preserve state
+and drafts. Header SVG/STL buttons use current geometry and source guards;
+configuration downloads are independent of generated state. The compact mm/unit
+input remains beside the geometry exports. Playback remains in the action bar.
 `viewer2d.js` draws rectangles or applied contours, with independent Wall/Shape
 navigation and periodic display clipping. Fits include actual contour extents;
 live changes retain user pan/zoom when the source dimensions are unchanged. `projection.js` displays stored meshes
@@ -390,7 +458,7 @@ visibility and existing Three.js object visibility change in place. Switching
 stages restores full visibility. Generate/Place one continue the applied generator settings and
 explicitly report when drafts were ignored or no new stones were generated.
 The bar separates apply/reset and placement actions on the left, feedback in the
-middle, and replay/export actions on the right, with internal vertical dividers.
+middle, and replay actions on the right, with internal vertical dividers.
 Busy actions disable conflicting controls and show an accessible activity/status
 line, with reduced-motion support. Stage switches cancel playback without
 changing source data. Failed operations retain previews and provide an error.

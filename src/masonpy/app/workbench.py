@@ -20,12 +20,14 @@ from masonpy.processing import (
 )
 
 from .session import GenerationSession
+from .configuration import configuration
 
 DEFAULT_SHAPE_SETTINGS = {
     "joint_width": 0.2,
     "distortion": 0,
     "seed": 1,
     "variation_scale": 6,
+    "corner_softening": 0,
 }
 
 DEFAULT_BUILD_SETTINGS = {
@@ -35,6 +37,9 @@ DEFAULT_BUILD_SETTINGS = {
     "depth": 0.25,
     "primitive": "tube",
     "tube_thickness": 1,
+    "depth_variation": 0,
+    "detail_seed": 1,
+    "bevel": 0,
 }
 
 
@@ -62,7 +67,47 @@ class WorkbenchSession(GenerationSession):
         self.generation_seconds = 0.0
         self._report_key = None
         self._report = None
+        self.shape_defaults = deepcopy(DEFAULT_SHAPE_SETTINGS)
+        self.build_defaults = deepcopy(DEFAULT_BUILD_SETTINGS)
         super().__init__(**kwargs)
+
+    def load_config(self, data: Any, *, source_revision: int | None = None) -> None:
+        """Apply validated parameters atomically, leaving an empty wall for explicit generation."""
+        config = configuration(data, DEFAULT_SHAPE_SETTINGS, DEFAULT_BUILD_SETTINGS)
+        with self._lock:
+            self._check_source_revision(source_revision, self.wall_revision, "Wall")
+            self.reset(
+                width=config["width"],
+                height=config["height"],
+                generator_id=config["generator"],
+                generator_parameters=config["parameters"],
+            )
+            self.shape_defaults = config["shape"]
+            self.build_defaults = config["build"]
+            self.shape_result = self.build_result = None
+            self.shape_source_revision = self.build_source_revision = None
+            self.shape_source_configuration = self.build_settings = None
+            self.shape_events.clear()
+            self.build_events.clear()
+
+    def export_config(self, data: Any = None) -> tuple[bytes, str]:
+        """Serialize parameters only; callers may supply valid unapplied form values."""
+        with self._lock:
+            if data is None:
+                data = dict(
+                    generator=self.generator_definition.id,
+                    width=self.wall.width,
+                    height=self.wall.height,
+                    parameters=self.generator_parameters,
+                    shape=self.shape_result.settings.to_dict()
+                    if self.shape_current
+                    else self.shape_defaults,
+                    build=self.build_settings
+                    if self.build_current
+                    else self.build_defaults,
+                )
+            config = configuration(data, DEFAULT_SHAPE_SETTINGS, DEFAULT_BUILD_SETTINGS)
+            return json.dumps(config, indent=2).encode(), "masonpy-config.json"
 
     def reset(self, **kwargs: Any) -> None:
         """Replace the logical source atomically; failed configuration preserves all stages."""
@@ -230,6 +275,7 @@ class WorkbenchSession(GenerationSession):
         distortion: float = 0,
         seed: int = 1,
         variation_scale: float = 6,
+        corner_softening: float = 0,
         *,
         source_revision: int | None = None,
     ) -> None:
@@ -237,7 +283,9 @@ class WorkbenchSession(GenerationSession):
         with self._lock:
             self._check_source_revision(source_revision, self.wall_revision, "Wall")
             try:
-                settings = ShapeSettings(joint_width, distortion, seed, variation_scale)
+                settings = ShapeSettings(
+                    joint_width, distortion, seed, variation_scale, corner_softening
+                )
                 if self.shape_current and self.shape_result.settings == settings:
                     self.shape_events.append(
                         "Shape already current; no new processing needed."
@@ -271,7 +319,9 @@ class WorkbenchSession(GenerationSession):
             )
             self.shape_events.append(
                 f"Applied Shape to {len(result.stones)} stones: distortion {settings.distortion:g}, "
-                f"joint width {settings.joint_width:g}, max movement {result.statistics.max_displacement:.3g} units "
+                f"joint width {settings.joint_width:g}, max movement {result.statistics.max_displacement:.3g} units; "
+                f"corner softening {settings.corner_softening:g}: {result.statistics.softened_stones} softened, "
+                f"{result.statistics.softening_reduced} reduced, {result.statistics.softening_skipped} unchanged "
                 f"(Wall revision {self.wall_revision})."
             )
 
@@ -293,11 +343,14 @@ class WorkbenchSession(GenerationSession):
                     "depth",
                     "primitive",
                     "tube_thickness",
+                    "depth_variation",
+                    "detail_seed",
+                    "bevel",
                 }
                 if set(settings) - allowed:
                     raise ValueError("unknown 3D setting")
                 config = {
-                    **DEFAULT_BUILD_SETTINGS,
+                    **self.build_defaults,
                     **settings,
                 }
                 if self.build_current and config == self.build_settings:
@@ -309,7 +362,15 @@ class WorkbenchSession(GenerationSession):
                     self.shape_result,
                     **{
                         k: config[k]
-                        for k in ("mode", "roundness", "resolution", "depth")
+                        for k in (
+                            "mode",
+                            "roundness",
+                            "resolution",
+                            "depth",
+                            "depth_variation",
+                            "detail_seed",
+                            "bevel",
+                        )
                     },
                 )
                 result = geometry.to_dict(
@@ -332,6 +393,21 @@ class WorkbenchSession(GenerationSession):
                 f"Built {len(result['stones'])} stones from Shape revision {self.shape_revision} "
                 f"({config['mode']}, depth {config['depth']:g})."
             )
+            if "statistics" in result:
+                stats = result["statistics"]
+                if stats["skipped_bevel_ids"] or stats["depth_fallback_ids"]:
+                    self.build_events.append(
+                        f"Unbeveled IDs: {stats['skipped_bevel_ids']}; "
+                        f"base-depth fallback IDs: {stats['depth_fallback_ids']}. "
+                        "Inspect stone Info for effective depth, bevel and fallback reason."
+                    )
+                self.build_events.append(
+                    f"Actual depth {stats['depth_min']:.3g}–{stats['depth_max']:.3g}; "
+                    f"{stats['beveled_stones']} stones beveled, "
+                    f"{len(stats['reduced_bevel_ids'])} bevels reduced, "
+                    f"{len(stats['skipped_bevel_ids'])} kept unbeveled; "
+                    f"{len(stats['depth_fallback_ids'])} depth fallbacks. No stones omitted."
+                )
 
     @staticmethod
     def _check_source_revision(expected: int | None, actual: int, stage: str) -> None:
@@ -419,7 +495,7 @@ class WorkbenchSession(GenerationSession):
                 "entries": self._history_entries(),
             }
             data["shape"] = {
-                "defaults": deepcopy(DEFAULT_SHAPE_SETTINGS),
+                "defaults": deepcopy(self.shape_defaults),
                 "revision": self.shape_revision,
                 "source_revision": self.shape_source_revision,
                 "current": self.shape_current,
@@ -428,12 +504,15 @@ class WorkbenchSession(GenerationSession):
                 "events": list(self.shape_events),
             }
             data["build"] = {
-                "defaults": deepcopy(DEFAULT_BUILD_SETTINGS),
+                "defaults": deepcopy(self.build_defaults),
                 "revision": self.build_revision,
                 "source_revision": self.build_source_revision,
                 "current": self.build_current,
                 "present": self.build_result is not None,
                 "settings": deepcopy(self.build_settings),
+                "statistics": deepcopy(self.build_result.get("statistics"))
+                if self.build_result
+                else None,
                 "events": list(self.build_events),
             }
             return data

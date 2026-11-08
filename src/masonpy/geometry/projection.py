@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import hashlib
 from collections import Counter
 from bisect import bisect_right
 from typing import Any
@@ -12,6 +13,7 @@ from masonpy.processing import ShapedStone, ShapedWall
 from masonpy.processing.contours import EPSILON, clip_x, cross, triangulate
 
 from .mesh import SurfaceMesh
+from .bevel import MAX_BEVEL_VERTICES, MAX_BUILD_TRIANGLES, validate_details
 
 
 class WallGeometry:
@@ -29,6 +31,9 @@ class WallGeometry:
         roundness: float = 0.0,
         resolution: int = 8,
         depth: float = 0.0,
+        depth_variation: float = 0.0,
+        detail_seed: int = 1,
+        bevel: float = 0.0,
     ) -> None:
         """Configure visual mapping only.
 
@@ -37,7 +42,19 @@ class WallGeometry:
             mode: "flat" or "projected"; projection never changes occupancy.
             roundness: Square (0) through sampled cylinder (1).
             resolution: Facets per rounded corner, from 1 to 64.
-            depth: Optional outward visual thickness; zero emits surfaces only."""
+            depth: Base outward thickness; zero emits surfaces only.
+            depth_variation: Per-stone relative range, from zero through 0.9.
+            detail_seed: Independent stable seed for depth samples keyed by stone ID.
+            bevel: Exposed-front chamfer width; zero disables, unsafe widths reduce
+                or retain an explicitly reported unbeveled base shell."""
+        validate_details(depth_variation, detail_seed, bevel)
+        self.depth_variation, self.detail_seed, self.bevel = (
+            depth_variation,
+            detail_seed,
+            bevel,
+        )
+        self._treatments = {}
+        self._offset_vectors = None
         self.shape = wall if isinstance(wall, ShapedWall) else None
         wall = wall.source.to_wall() if self.shape else wall
         if mode not in ("flat", "projected"):
@@ -58,7 +75,12 @@ class WallGeometry:
         ):
             raise ValueError("resolution must be an integer from 1 to 64")
         self.wall, self.mode = wall, mode
+        self._source_widths = {s.id: s.width for s in wall.stones} if self.shape else {}
         self.roundness, self.resolution, self.depth = roundness, resolution, depth
+        if self.bevel and self.depth:
+            from masonpy.processing.validation import clipper
+
+            clipper()  # Dependency errors are build errors, not per-stone fallbacks.
         points = []
         for quarter in range(4):
             angle = -quarter * math.pi / 2
@@ -132,6 +154,22 @@ class WallGeometry:
         s = x % self.wall.width
         i = min(bisect_right(self.distances, s) - 1, len(self.section) - 1)
         t = (s - self.distances[i]) / (self.distances[i + 1] - self.distances[i])
+        if offset and (self.depth_variation or self.bevel):
+            if self._offset_vectors is None:
+                unit = self._offset_section(1)
+                self._offset_vectors = [
+                    (q[0] - p[0], q[1] - p[1]) for p, q in zip(self.section, unit)
+                ]
+            a, b = self.section[i], self.section[(i + 1) % len(self.section)]
+            u, v = (
+                self._offset_vectors[i],
+                self._offset_vectors[(i + 1) % len(self.section)],
+            )
+            return (
+                a[0] + (b[0] - a[0]) * t + offset * (u[0] + (v[0] - u[0]) * t),
+                y,
+                a[1] + (b[1] - a[1]) * t + offset * (u[1] + (v[1] - u[1]) * t),
+            )
         points = self.section if offset == 0 else self._offset_section(offset)
         a, b = points[i], points[(i + 1) % len(points)]
         return (a[0] + (b[0] - a[0]) * t, y, a[1] + (b[1] - a[1]) * t)
@@ -156,19 +194,142 @@ class WallGeometry:
                     cuts.append(value)
         return sorted(cuts)
 
+    def depth_for(self, stone_id: int) -> float:
+        """Choose one bounded depth from logical identity, without consuming any RNG."""
+        if not self.depth or not self.depth_variation:
+            return self.depth
+        digest = hashlib.blake2b(
+            f"masonpy-depth:{self.detail_seed}:{stone_id}".encode(), digest_size=8
+        ).digest()
+        value = int.from_bytes(digest, "little") / ((1 << 64) - 1)
+        return self.depth * (1 + self.depth_variation * (2 * value - 1))
+
     def stone_mesh(self, stone: Stone) -> SurfaceMesh:
+        """Build one whole logical stone with deterministic depth and optional front bevel."""
+        if not self.depth_variation and not self.bevel:
+            return self._rectangular_mesh(stone, self.depth)
+        contour = ShapedStone(
+            stone.id,
+            (
+                (stone.x, stone.y),
+                (stone.x + stone.width, stone.y),
+                (stone.x + stone.width, stone.y + stone.height),
+                (stone.x, stone.y + stone.height),
+            ),
+        )
+        return self._treated_mesh(contour, stone)
+
+    def contour_mesh(self, stone: ShapedStone) -> SurfaceMesh:
+        """Preserve a shaped outline while independently treating its exposed extrusion."""
+        if not self.depth_variation and not self.bevel:
+            return self._contour_mesh(stone, self.depth)
+        return self._treated_mesh(stone)
+
+    def _treated_mesh(
+        self, stone: ShapedStone, rectangle: Stone | None = None
+    ) -> SurfaceMesh:
+        """Validate optional treatments, reducing the bevel or retaining the base shell."""
+        from masonpy.exporting import shell_triangles
+        from .bevel import chamfer_mesh
+
+        depth = self.depth_for(stone.id)
+        record = dict(
+            depth=depth,
+            bevel=0.0,
+            bevel_reduced=False,
+            bevel_skipped=False,
+            depth_fallback=False,
+            bevel_note="",
+        )
+        self._treatments[stone.id] = record
+        if self.bevel and depth:
+            source_width = (
+                rectangle.width if rectangle else self._source_widths.get(stone.id)
+            )
+            ring = self.mode == "projected" and source_width == self.wall.width
+            span = min(
+                max(p[i] for p in stone.vertices) - min(p[i] for p in stone.vertices)
+                for i in (0, 1)
+            )
+            cap = min(self.bevel, depth * 0.45, span * 0.2)
+            if not ring and len(stone.vertices) <= MAX_BEVEL_VERTICES:
+                for attempt in range(6):
+                    width = cap / 2**attempt
+                    if width <= 1e-6:
+                        break
+                    try:
+                        mesh = chamfer_mesh(self, stone, depth, width)
+                        shell_triangles(mesh.to_dict(), 1)
+                        record.update(
+                            bevel=width,
+                            bevel_reduced=width < self.bevel * (1 - 1e-9),
+                            bevel_note=(
+                                "Reduced after validation"
+                                if attempt
+                                else "Limited by depth/contour span"
+                            )
+                            if width < self.bevel * (1 - 1e-9)
+                            else "",
+                        )
+                        return mesh
+                    except ValueError:
+                        continue
+            record["bevel_skipped"] = True
+            record["bevel_note"] = (
+                "Full-ring seam"
+                if ring
+                else "Contour complexity limit"
+                if len(stone.vertices) > MAX_BEVEL_VERTICES
+                else "No valid chamfer within six attempts"
+            )
+        elif self.bevel:
+            record["bevel_skipped"] = True
+            record["bevel_note"] = "Zero extrusion depth"
+        try:
+            mesh = (
+                self._rectangular_mesh(rectangle, depth)
+                if rectangle
+                else self._contour_mesh(stone, depth)
+            )
+        except ValueError as error:
+            raise ValueError(
+                f"Stone {stone.id}: invalid base geometry: {error}"
+            ) from error
+        if depth and (self.depth_variation or self.bevel):
+            try:
+                shell_triangles(mesh.to_dict(), 1)
+            except ValueError as error:
+                if depth == self.depth:
+                    raise ValueError(
+                        f"Stone {stone.id}: invalid base shell: {error}"
+                    ) from error
+                mesh = (
+                    self._rectangular_mesh(rectangle, self.depth)
+                    if rectangle
+                    else self._contour_mesh(stone, self.depth)
+                )
+                try:
+                    shell_triangles(mesh.to_dict(), 1)
+                except ValueError as fallback_error:
+                    raise ValueError(
+                        f"Stone {stone.id}: invalid base shell: {fallback_error}"
+                    ) from fallback_error
+                record.update(depth=self.depth, depth_fallback=True)
+        return mesh
+
+    def _rectangular_mesh(self, stone: Stone, depth: float) -> SurfaceMesh:
         """Fold one whole stone at face/period cuts; positive depth adds a closed visual shell."""
         start, width = stone.x, stone.width
         cuts = self.splits(start, width)
         mesh = SurfaceMesh()
         y0, y1 = stone.y, stone.y + stone.height
         for left, right in zip(cuts, cuts[1:]):
-            a, b = self.point(left, y0, self.depth), self.point(right, y0, self.depth)
-            c, d = self.point(right, y1, self.depth), self.point(left, y1, self.depth)
+            a, b = self.point(left, y0, depth), self.point(right, y0, depth)
+            c, d = self.point(right, y1, depth), self.point(left, y1, depth)
             mesh.quad(a, b, c, d)
             mesh.edge(a, b)
             mesh.edge(d, c)
-            if self.depth:
+            if depth:
                 e, f = self.point(left, y0), self.point(right, y0)
                 g, h = self.point(right, y1), self.point(left, y1)
                 mesh.quad(h, g, f, e)  # back
@@ -181,16 +342,16 @@ class WallGeometry:
         if not closed:
             for distance, reverse in ((cuts[0], False), (cuts[-1], True)):
                 a, b = (
-                    self.point(distance, y0, self.depth),
-                    self.point(distance, y1, self.depth),
+                    self.point(distance, y0, depth),
+                    self.point(distance, y1, depth),
                 )
                 mesh.edge(a, b)
-                if self.depth:
+                if depth:
                     c, d = self.point(distance, y1), self.point(distance, y0)
                     mesh.quad(*((d, c, b, a) if reverse else (a, b, c, d)))
         return mesh
 
-    def contour_mesh(self, stone: ShapedStone) -> SurfaceMesh:
+    def _contour_mesh(self, stone: ShapedStone, depth: float) -> SurfaceMesh:
         """Triangulate arbitrary simple contours, cutting faces only at mapping facets.
 
         Front/back faces share strip intersections. Side walls follow only the
@@ -215,9 +376,9 @@ class WallGeometry:
                     if cross(*face) <= EPSILON * EPSILON:
                         continue
                     index = len(mesh.vertices)
-                    mesh.vertices.extend(self.point(x, y, self.depth) for x, y in face)
+                    mesh.vertices.extend(self.point(x, y, depth) for x, y in face)
                     mesh.triangles.append((index, index + 1, index + 2))
-                    if self.depth:
+                    if depth:
                         index = len(mesh.vertices)
                         mesh.vertices.extend(
                             self.point(x, y) for x, y in reversed(face)
@@ -255,9 +416,9 @@ class WallGeometry:
         for (a, b), key in zip(boundaries, keys):
             if self.mode == "projected" and counts[key] == 2:
                 continue
-            front_a, front_b = self.point(*a, self.depth), self.point(*b, self.depth)
+            front_a, front_b = self.point(*a, depth), self.point(*b, depth)
             mesh.edge(front_a, front_b)
-            if self.depth:
+            if depth:
                 back_a, back_b = self.point(*a), self.point(*b)
                 # Sloping extruded edges can form nonplanar quads after mapping.
                 # Choose the same diagonal for reversed/shared boundary segments,
@@ -321,20 +482,47 @@ class WallGeometry:
             from masonpy.analysis.grid import _occupancy_cells
 
             _occupancy_cells(self.wall, True)
-        return {
+        self._treatments.clear()
+        stones = []
+        triangle_count = 0
+        sources = self.shape.stones if self.shape else self.wall.stones
+        for source in sources:
+            mesh = self.contour_mesh(source) if self.shape else self.stone_mesh(source)
+            triangle_count += len(mesh.triangles)
+            if (
+                self.depth_variation or self.bevel
+            ) and triangle_count > MAX_BUILD_TRIANGLES:
+                raise ValueError(
+                    "3D detail build exceeds one million triangles; reduce mapping resolution or bevel"
+                )
+            stones.append({"id": source.id, **mesh.to_dict()})
+        result = {
             "mode": self.mode,
             "perimeter": self.wall.width,
             "coverage": "whole stones, perimeter modulo"
             if self.mode == "projected"
             else "whole stones, planar",
             "section": self.section if self.mode == "projected" else [],
-            "stones": [
-                {"id": s.id, **self.contour_mesh(s).to_dict()}
-                for s in self.shape.stones
-            ]
-            if self.shape
-            else [
-                {"id": s.id, **self.stone_mesh(s).to_dict()} for s in self.wall.stones
-            ],
+            "stones": stones,
             "primitive": self.primitive_mesh(primitive, tube_thickness).to_dict(),
         }
+        if self.depth_variation or self.bevel:
+            records = list(self._treatments.values())
+            result["statistics"] = dict(
+                depth_min=min((r["depth"] for r in records), default=0),
+                depth_max=max((r["depth"] for r in records), default=0),
+                beveled_stones=sum(r["bevel"] > 0 for r in records),
+                reduced_bevel_ids=[
+                    i for i, r in self._treatments.items() if r["bevel_reduced"]
+                ],
+                skipped_bevel_ids=[
+                    i for i, r in self._treatments.items() if r["bevel_skipped"]
+                ],
+                depth_fallback_ids=[
+                    i for i, r in self._treatments.items() if r["depth_fallback"]
+                ],
+                omitted_stones=0,
+            )
+            for stone in result["stones"]:
+                stone["treatment"] = dict(self._treatments[stone["id"]])
+        return result

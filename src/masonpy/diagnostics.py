@@ -329,7 +329,6 @@ def run_case(case: BatteryCase, seed: int) -> dict[str, Any]:
         "failure": failure,
         "seconds": elapsed,
         "wall": wall.to_dict(),
-        "random_state": generator._random.getstate(),
     }
 
 
@@ -498,39 +497,19 @@ def write_reports(
             row = next(r for r in group if r["seed"] == seed)
             filename = f"{case.id}-{seed}.svg"
             (output / filename).write_text(_gallery_svg(row))
-            specimen_name = f"{case.id}-{seed}.wall.json"
+            specimen_name = f"{case.id}-{seed}.config.json"
             (output / specimen_name).write_text(
                 json.dumps(
                     dict(
-                        wall=row["wall"],
-                        generator=dict(
-                            id="ashlar",
-                            parameters={
-                                **{
-                                    key: int(value)
-                                    if isinstance(value, bool)
-                                    else value
-                                    for key, value in row[
-                                        "effective_parameters"
-                                    ].items()
-                                },
-                                "seed": seed,
+                        generator="ashlar",
+                        width=row["width"],
+                        height=row["height"],
+                        parameters={
+                            **{
+                                key: int(value) if isinstance(value, bool) else value
+                                for key, value in row["effective_parameters"].items()
                             },
-                        ),
-                        construction=dict(
-                            complete=row["complete"], failure=row["failure"]
-                        ),
-                        random_state=row.get("random_state"),
-                        generation_seconds=row["seconds"],
-                        analysis={
-                            key: row[key]
-                            for key in (
-                                "summary",
-                                "fill",
-                                "sneck_count",
-                                "sneck_area_share",
-                                "invariant_errors",
-                            )
+                            "seed": seed,
                         },
                     ),
                     indent=2,
@@ -544,7 +523,7 @@ def write_reports(
                 else "Complete"
             )
             cards.append(
-                f'<figure><a href="{filename}"><img src="{filename}" alt="{case.id}, seed {seed}"></a><figcaption>Seed {seed} · {row["fill"]:.0%} filled · {row["sneck_area_share"]:.1%} sneck area · <a href="{specimen_name}" download>Wall JSON</a><p>{html.escape(failure)}</p></figcaption></figure>'
+                f'<figure><a href="{filename}"><img src="{filename}" alt="{case.id}, seed {seed}"></a><figcaption>Seed {seed} · {row["fill"]:.0%} filled · {row["sneck_area_share"]:.1%} sneck area · <a href="{specimen_name}" download>Config JSON</a><p>{html.escape(failure)}</p></figcaption></figure>'
             )
         area = summary["complete_sneck_area_share"]
         body.append(

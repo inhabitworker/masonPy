@@ -43,7 +43,8 @@ export class WorkbenchApp {
     for (const [id, action] of [["step", "step"], ["undo", "undo"], ["generate", "generate"]]) {
       document.querySelector(`#${id}`).addEventListener("click", () => this.mutate(action));
     }
-    document.querySelector("#export-stage").addEventListener("click", () => this.exportStage());
+    document.querySelector("#export-svg").addEventListener("click", () => this.exportStage(this.stages.svgStage()));
+    document.querySelector("#export-stl").addEventListener("click", () => this.exportStage("3d"));
     document.querySelector("#play-forward").addEventListener("click", () => this.play(1));
     document.querySelector("#play-reverse").addEventListener("click", () => this.play(-1));
   }
@@ -109,14 +110,15 @@ export class WorkbenchApp {
     if (["generate", "step"].includes(action)) this.details?.beginGeneration();
     const working = { reset: "Applying wall parameters…", step: "Placing one stone…",
       undo: "Undoing placement…", generate: "Generating with applied wall parameters…",
-      shape: "Applying shared distortion and mortar inset…", build: "Building 3D geometry…" };
-    working.load = 'Validating and loading wall JSON…';
+      shape: "Applying distortion, mortar and corner softening…", build: "Building 3D geometry…" };
+    working.load = 'Loading configuration…';
     working.history = 'Restoring saved wall…';
     this.stages.setBusy(true, working[action], { live });
     let message, errorMessage, received;
     try {
       const state = received = await this.api.post(`/api/${action}`, request);
       if (restore) this.parameters.restore(state);
+      if (action === "load") this.stages.restoreConfig(state);
       message = this.actionMessage(action, state, before, dirty);
       if (await this.accept(state, { preserveSelection: downstream }) === false) return false;
     } catch (error) {
@@ -126,6 +128,7 @@ export class WorkbenchApp {
       try {
         recovered = await this.api.get("/api/state");
         if (restore && !error.rejected && recovered.wall_revision !== before.wall_revision) this.parameters.restore(recovered);
+        if (action === "load" && !error.rejected && recovered.wall_revision !== before.wall_revision) this.stages.restoreConfig(recovered);
         await this.accept(recovered, { preserveSelection: true });
         refreshed = true;
       } catch { /* Keep the last accepted snapshot. */ }
@@ -148,13 +151,16 @@ export class WorkbenchApp {
     if (errorMessage) this.showError(errorMessage);
     else this.stages.message(message + (preservedDrafts ? " Refreshed using applied settings; parameter drafts remain unapplied." : ""),
       Boolean(this.state.failure && ["generate", "step"].includes(action)));
-    if (!errorMessage && restore) await this.refreshStage(this.stages.active);
+    if (!errorMessage && action === "load") this.stages.tabs.select("wall");
+    if (!errorMessage && action === "history") await this.refreshStage(this.stages.active);
+    if (!errorMessage && action === "load") this.stages.message(message);
     return !errorMessage;
   }
 
   /** Describe the confirmed operation independently of subsequent rendering. */
   actionMessage(action, state, before, dirty) {
-    if (["load", "history"].includes(action)) {
+    if (action === "load") return "Configuration loaded. Generate wall to build with these parameters.";
+    if (action === "history") {
       const count = state.wall.stones.length;
       const outcome = state.failure ? "stopped" : state.complete ? "complete" : "partial";
       return `Restored exact wall (${count} stone${count === 1 ? "" : "s"}, ${outcome}) and applied Wall parameters. No generation was run.`;
@@ -226,7 +232,8 @@ export class WorkbenchApp {
     }
     if (stage === "wall") this.details.render(state, this.visibleCount);
     else this.details.renderStage(stage, stage === "shape" ? state.shape : state.build,
-      stage === "shape" ? state.shape.result : this.meshSnapshot?.shape);
+      stage === "shape" ? state.shape.result : this.meshSnapshot?.shape,
+      stage === "3d" ? this.meshSnapshot?.geometry : null);
     this.projection.render(this.meshSnapshot, this.meshRevision, this.selectedId,
       stage === "3d" ? this.visibleCount : this.meshSnapshot?.shape?.source.stones.length);
     this.select(this.selectedId, { scrollLog: false, focus: false });
@@ -286,9 +293,8 @@ export class WorkbenchApp {
   }
 
   /** Download the full applied result at a physical scale; drafts/playback are excluded. */
-  async exportStage() {
-    if (this.stages.exportAvailability()) return;
-    const stage = this.stages.active;
+  async exportStage(stage = this.stages.active) {
+    if (this.stages.exportAvailability(stage)) return;
     const revision = stage === "wall" ? this.state.wall_revision
       : stage === "shape" ? this.state.shape.revision : this.state.build.revision;
     const scale = Number(document.querySelector("#export-scale").value);
@@ -304,17 +310,18 @@ export class WorkbenchApp {
     else this.stages.message(message);
   }
 
-  /** Save the actual applied specimen; generation drafts and downstream buffers stay separate. */
+  /** Export form parameters without geometry, logs, analysis or random-state snapshots. */
   async saveWall() {
     if (!this.state || this.stages.busy || this.stages.pending) return;
-    this.stages.setBusy(true, 'Preparing wall JSON…');
+    const config = { ...this.parameters.resetPayload(), shape:this.stages.payload("shape"), build:this.stages.payload("3d") };
+    this.stages.setBusy(true, 'Preparing config JSON…');
     let errorMessage;
     try {
-      const {blob, filename} = await this.api.download({revision:this.state.wall_revision}, '/api/save');
+      const {blob, filename} = await this.api.download({config}, '/api/save');
       saveAttachment(blob, filename);
     } catch (error) { errorMessage = error.message; }
     finally { this.stages.setBusy(false); this.updateWallActions(); }
-    if (errorMessage) this.showError('Save wall: ' + errorMessage);
-    else this.stages.message('Saved applied wall geometry, generator parameters and placement evidence as JSON. Drafts and downstream meshes are excluded.');
+    if (errorMessage) this.showError('Export config: ' + errorMessage);
+    else this.stages.message('Exported Wall, Shape and 3D parameters from the controls, including unapplied edits.');
   }
 }

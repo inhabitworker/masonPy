@@ -1,4 +1,4 @@
-/** Session wall choices and plain JSON attachments; Python validates all loaded data. */
+/** Session history and compact parameter configurations validated by Python. */
 export class WallLibrary {
   constructor(onChange, onSave, onError) {
     Object.assign(this, { onChange, onError, state: null });
@@ -16,11 +16,11 @@ export class WallLibrary {
     if (!file || !this.state) return;
     const revision = this.state.wall_revision;
     try {
-      if (file.size > 32 * 1024 * 1024) throw new Error('Wall JSON must be no larger than 32 MiB.');
+      if (file.size > 32 * 1024 * 1024) throw new Error('Config JSON must be no larger than 32 MiB.');
       const record = JSON.parse(await file.text());
-      if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error('Wall JSON must be an object.');
+      if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error('Config JSON must be an object.');
       await this.onChange('load', {record, source_revision:revision});
-    } catch (error) { this.onError(`Load wall: ${error.message}`); }
+    } catch (error) { this.onError(`Load config: ${error.message}`); }
     finally { this.input.value = ''; }
   }
 

@@ -161,6 +161,9 @@ class StageSessionTests(unittest.TestCase):
             depth=0.25,
             primitive="tube",
             tube_thickness=1,
+            depth_variation=0,
+            detail_seed=1,
+            bevel=0,
         )
         self.assertEqual(defaults.to_dict()["build"]["defaults"], expected)
         session = WorkbenchSession(width=40, height=8)

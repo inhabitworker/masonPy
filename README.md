@@ -59,29 +59,55 @@ CDN access for pinned Three.js 0.180.0 imports; there is no npm or build step.
 It supports flat walls and perimeter-preserving square/rounded/cylindrical
 projections, with optional visual stone depth and a solid/tube core.
 
-## Saved walls and session history
+The 3D **Depth variation** slider adds deterministic per-stone variation around
+Stone depth: 15% at depth 0.25 gives a range of 0.2125–0.2875 units. The rear
+mounting surface and core stay fixed. **Detail seed** under Advanced controls
+these values independently of generation and Shape. Variation ranges from 0 to
+90%; zero disables it, and depth zero still creates surfaces only. Variation
+does not add triangles or change with playback, iteration order or mapping cuts.
 
-Header **Save** downloads a plain JSON specimen: the actual unit-grid stones,
-applied generator parameters, completion/failure outcome, placement explanations,
-available random continuation state and measured analysis. **Load** validates the
-whole file before replacing the current wall. It restores geometry directly;
-loading never reruns generation. Missing original explanations are marked as
-unavailable. Geometry outside the current stock policy is retained and flagged
-by analysis rather than silently changed. No schema-version bookkeeping is used.
+**Edge bevel** adds one exposed-front chamfer band, with its width in grid units.
+Try 0.03–0.05 with depth 0.25. It works on the applied Shape, including softened
+corners; it is a chamfer, not a multi-segment fillet. Both new effects default to
+zero, preserving existing geometry. They participate in Live/Build, config
+load/export and STL; 2D Shape/SVG and wall generation remain unchanged.
 
-The history dropdown keeps each generation attempt for the server session,
-including partial and stopped walls. Place one/Generate updates the active entry;
-repeating Generate on a finished wall does not add duplicates. Apply & reset
-preserves the departing specimen, and a new entry starts on the next placement
-attempt. Loading JSON adds an entry. Selecting an entry restores its wall and
-applied Wall controls. Shape/3D settings remain shared across the session, and an
-active downstream stage refreshes against the restored source. History is kept
-in memory; save JSON to keep a specimen after restarting the server.
+Bevels are limited per stone by depth and contour span, then reduced or skipped
+if their geometry cannot be validated. Full projected rings retain their original
+edge treatment to avoid artificial seam cuts. Each retained stone's **Info** shows
+actual depth, applied bevel and fallback reason; Events summarize reductions and
+list fallback IDs. A rare precision failure in varied extrusion falls back to
+base depth. No stones are silently omitted. An invalid base shell fails the build
+atomically and retains the previous preview.
 
-Save excludes unapplied drafts, playback position and downstream mesh buffers.
-It can also save an empty applied recipe. Imports are limited to 32 MiB and four
-million grid cells. A parameter-only reset recipe (`generator`, `width`, `height`,
-`parameters`) is accepted as an empty wall; generation remains explicit.
+Active details have work limits: bevels skip contours above 256 vertices, retry at
+most six widths and limit individual chamfers to 12,000 scored triangles. Detail
+builds stop above one million stone triangles; reduce mapping resolution or bevel
+if that limit is reached. Closed-shell/float32 checks run before accepting treated
+shells, and export validates again at the requested physical scale.
+
+## Configurations and session history
+
+Header **Export config** downloads a compact JSON recipe: generator, wall size,
+generator parameters, and Shape/3D parameters currently in the controls, including
+unapplied edits. It contains no stones, event logs, analysis or RNG snapshots.
+Exporting a config is available before generation and does not apply the edits.
+
+**Load config** validates all parameters before applying them, resets to an empty
+Wall and restores the Shape/3D controls. Choose Generate wall explicitly to
+reproduce the combination. A minimal recipe needs only `generator`, `width`,
+`height` and `parameters`; omitted Shape/3D settings use defaults. Previously
+exported full specimens are accepted by extracting their parameter recipe.
+Imports are limited to 32 MiB and four million grid cells. There is no format
+version/migration layer.
+
+The history dropdown retains exact completed, partial and stopped walls for the
+server session. A generation attempt creates an entry; subsequent placements and
+repeat Generate update it. Reset or loading a config preserves the departing
+entry. Selecting one restores its geometry and applied Wall controls, with the
+current session's Shape/3D settings. An active downstream stage refreshes against
+the restored source. History lives in memory; config files reproduce settings,
+while SVG/STL preserve computed output geometry.
 
 ## Workbench analysis
 
@@ -97,14 +123,16 @@ diagnostic battery. Sneck classification comes from dimensions against applied
 Ashlar minima. Metrics always describe the full stored specimen, even during
 playback; the final summary appears when all placements are visible. These are
 face-layout checks, not structural engineering assessments.
-Each battery gallery example also has a **Wall JSON** download that Load accepts
-directly. It includes exact geometry and outcome, but not the original per-stone
-explanations; the workbench marks those as unavailable.
+Each battery gallery example also has a compact **Config JSON** download. Load
+it and Generate wall to reproduce the parameters and seed. The full batch report
+continues to retain geometry, outcomes and analysis for comparison.
 
 ## Export
 
-The right side of the action bar exports the full applied result, independent of
-viewer overlays, zoom and playback position. Wall and Shape export clean SVG
+Header **SVG** and **STL** export the full computed result, independent of viewer
+overlays, zoom and playback position. SVG uses Wall contours on the Wall tab and
+current Shape contours on Shape/3D. STL uses the current 3D build from any tab.
+Buttons are disabled until their computed source is available and current. Wall and Shape export clean SVG
 with stone IDs and logical coordinates. Periodic walls use one reference
 circumference; finite walls retain whole overhanging stones. The mm/unit field
 sets physical SVG dimensions and scales 3D coordinates for binary STL.
@@ -151,9 +179,25 @@ of the thinnest incident stone dimension times the distortion factor. The base
 and top retain their height. Shared T-junctions include corners across the
 periodic seam, and each whole stone retains its source ID.
 
+Shape also offers **Corner softening**, from 0 (off, the default) to 1. It acts
+after distortion and mortar, cutting convex corners with short quadratic curves.
+The nominal radius is one quarter of each post-mortar contour's short bounding
+span, multiplied by the slider value. Individual corners are limited by their
+adjacent edges; concave and nearly straight junctions stay intact. Try 0.5 first
+for a gently worn silhouette, then increase toward 1 for rounder stones.
+
+Small stones receive proportionally smaller treatment. Unsafe proposals retry at
+smaller radii, then retain the original stone if necessary; no stone is removed.
+Full-circumference stones are left unchanged to avoid rounding artificial seam
+corners. Events/Info report softened, reduced and unchanged counts. Original
+post-mortar profiles are retained alongside softened contours for future 3D edge
+treatments. Wall occupancy and generation RNG are unchanged. The setting follows
+Live/Apply, config load/export, SVG contours and the polygon-based 3D/STL path.
+Existing errors from mortar consuming a stone remain explicit.
+
 ```python
 shaped = shape_wall(wall, joint_width=0.2, distortion=0.6,
-                    seed=1, variation_scale=6)
+                    seed=1, variation_scale=6, corner_softening=0.5)
 print(shaped.statistics.max_displacement)  # pre-inset movement in grid units
 ```
 
@@ -187,7 +231,7 @@ mm/unit alone scales the print without changing the layout.
 - `analysis/`: skyline, joint runs, local queries and descriptive statistics.
 - `processing/`: inherited descriptions, periodic shared topology, fields, validation and inset.
 - `geometry/`: polygon triangulation/projection, extrusion and mesh buffers.
-- `records.py`: validated JSON specimens, exact geometry and continuation state.
+- `records.py`: isolated exact snapshots and continuation state for session history.
 - `exporting.py`: clean SVG and validated binary STL attachments.
 - `app/`: optional session, stdlib HTTP server and component-based browser UI.
 - `diagnostics.py`: reproducible Ashlar quality battery and HTML/SVG/JSON reports.
@@ -232,8 +276,8 @@ Some cases intentionally have incompatible stock. This is a face-layout
 diagnostic, not a structural assessment or guarantee of arbitrary-case completion.
 Use `--compare /path/to/previous/report.json` to compare matching settings/seeds;
 keep separate output directories for successive snapshots. The JSON records
-effective settings, generator and shared-analysis source hashes, and loadable
-JSON specimens alongside the representative SVGs. See [DOC.md](DOC.md) for the stock
+effective settings, generator and shared-analysis source hashes, and compact
+config JSON recipes alongside the representative SVGs. See [DOC.md](DOC.md) for the stock
 rules, bounded lookahead and failure semantics.
 
 ## Project notes and future work
@@ -246,5 +290,5 @@ integration. They are candidates for later work, not implemented features.
 
 SVG, JSON and STL exports are implemented. STL validates each shell separately;
 separate/contacting shells and practical printing constraints still need review
-in the slicer. JSON persistence stores source specimens; history and downstream
-settings remain server-session state.
+in the slicer. Config JSON stores parameter combinations; exact wall history remains
+server-session state.

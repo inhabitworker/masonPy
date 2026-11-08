@@ -21,7 +21,7 @@ export class StagePanel {
       document.querySelector(`#live-${stage}`).addEventListener("change", () => this.edit(stage));
     }
     document.querySelector("#shape-reset").addEventListener("click", () => {
-      for (const [id, value] of Object.entries({ "joint-width": .2, "shape-distortion": 0,
+      for (const [id, value] of Object.entries({ "joint-width": .2, "shape-distortion": 0, "corner-softening": 0,
         "shape-seed": 1, "variation-scale": 6 })) document.querySelector(`#${id}`).value = value;
       this.edit("shape");
     });
@@ -41,7 +41,8 @@ export class StagePanel {
       joint_width: Number(document.querySelector("#joint-width").value),
       distortion: Number(document.querySelector("#shape-distortion").value),
       seed: Number(document.querySelector("#shape-seed").value),
-      variation_scale: Number(document.querySelector("#variation-scale").value)
+      variation_scale: Number(document.querySelector("#variation-scale").value),
+      corner_softening: Number(document.querySelector("#corner-softening").value)
     } : this.settings();
   }
 
@@ -65,7 +66,10 @@ export class StagePanel {
       resolution: Number(document.querySelector("#projection-resolution").value),
       primitive: document.querySelector("#projection-primitive").value,
       tube_thickness: Number(document.querySelector("#tube-thickness").value),
-      depth: Number(document.querySelector("#stone-depth").value)
+      depth: Number(document.querySelector("#stone-depth").value),
+      depth_variation: Number(document.querySelector("#depth-variation").value),
+      bevel: Number(document.querySelector("#edge-bevel").value),
+      detail_seed: Number(document.querySelector("#detail-seed").value)
     };
   }
 
@@ -92,7 +96,7 @@ export class StagePanel {
       if (shapeSettings) {
         const settings = shapeSettings;
         for (const [key, id] of Object.entries({ joint_width: "joint-width", distortion: "shape-distortion",
-          seed: "shape-seed", variation_scale: "variation-scale" })) {
+          seed: "shape-seed", variation_scale: "variation-scale", corner_softening: "corner-softening" })) {
           if (settings[key] !== undefined) document.querySelector(`#${id}`).value = settings[key];
         }
       }
@@ -100,7 +104,8 @@ export class StagePanel {
       if (buildSettings) {
         for (const [key, id] of Object.entries({ mode: "projection-mode", roundness: "projection-roundness",
           resolution: "projection-resolution", primitive: "projection-primitive",
-          tube_thickness: "tube-thickness", depth: "stone-depth" })) {
+          tube_thickness: "tube-thickness", depth: "stone-depth", depth_variation:"depth-variation",
+          bevel:"edge-bevel", detail_seed:"detail-seed" })) {
           document.querySelector(`#${id}`).value = buildSettings[key];
         }
       }
@@ -110,13 +115,22 @@ export class StagePanel {
     this.update();
   }
 
+  /** Restore imported downstream parameters without triggering live processing. */
+  restoreConfig(state) {
+    this.initialized = false;
+    this.render(state);
+  }
+
+  /** SVG follows the inspected 2D description; 3D uses its current Shape contours. */
+  svgStage() { return this.active === "wall" ? "wall" : "shape"; }
+
   /** Export the whole applied stage, never the current playback prefix. */
-  exportAvailability() {
+  exportAvailability(stage = this.active) {
     if (!this.state) return "Load a wall first";
     if (this.busy || this.pending) return "Wait for the current operation to finish";
     if (!document.querySelector("#export-scale").checkValidity()) return "Enter a positive millimetres-per-unit scale";
-    if (this.active === "wall") return this.state.wall.stones.length ? "" : "Place or generate stones before exporting";
-    if (this.active === "shape") return this.state.shape.current ? "" : "Apply Shape to the current wall before exporting";
+    if (stage === "wall") return this.state.wall.stones.length ? "" : "Place or generate stones before exporting";
+    if (stage === "shape") return this.state.shape.current ? "" : "Apply Shape to the current wall before exporting";
     if (!this.state.build.current) return "Build 3D from the current Shape before exporting";
     if (this.state.build.settings.depth <= 0) return "Build with positive stone depth before exporting STL";
     return "";
@@ -141,7 +155,9 @@ export class StagePanel {
     document.querySelector('#analysis-legend').hidden = !wall || !document.querySelector('#analysis-colours').checked;
     document.querySelector("#roundness-value").textContent = document.querySelector("#projection-roundness").value;
     document.querySelector("#depth-value").textContent = document.querySelector("#stone-depth").value;
+    document.querySelector("#depth-variation-value").textContent = `${Math.round(Number(document.querySelector("#depth-variation").value)*100)}%`;
     document.querySelector("#distortion-value").textContent = document.querySelector("#shape-distortion").value;
+    document.querySelector("#softening-value").textContent = document.querySelector("#corner-softening").value;
     this.feedback.classList.toggle("busy", this.busy || this.pending);
     if (!this.state) return;
     const s = this.state.shape, b = this.state.build;
@@ -161,13 +177,13 @@ export class StagePanel {
       : !b.current ? "Shape changed — Build 3D again. Showing the previous build."
       : buildDirty ? "Parameters changed — Build 3D to update the mesh." : "3D build is current.";
     if (!wall) document.querySelector("#parameter-summary").textContent = shape
-      ? `Joint width: ${this.payload("shape").joint_width} · distortion: ${this.payload("shape").distortion}`
-      : `${this.settings().mode} · depth: ${this.settings().depth}`;
-    const reason = this.exportAvailability();
-    const button = document.querySelector("#export-stage");
-    button.disabled = Boolean(reason);
-    button.textContent = three ? "Export STL" : "Export SVG";
-    button.title = reason || `Export the full applied ${three ? "3D mesh as separate stone and optional core shells" : this.active + " contours"}; playback and unapplied drafts are excluded`;
+      ? `Joint width: ${this.payload("shape").joint_width} · distortion: ${this.payload("shape").distortion} · corner softening: ${this.payload("shape").corner_softening}`
+      : `${this.settings().mode} · depth: ${this.settings().depth} ±${Math.round(this.settings().depth_variation*100)}% · bevel: ${this.settings().bevel}`;
+    for (const [id, stage] of [["export-svg", this.svgStage()], ["export-stl", "3d"]]) {
+      const reason = this.exportAvailability(stage), button = document.querySelector(`#${id}`);
+      button.disabled = Boolean(reason);
+      button.title = reason || `Export full applied ${stage === "3d" ? "3D mesh with optional core as STL" : stage + " contours as SVG"}`;
+    }
     if (refreshFeedback && !this.busy && !this.pending) this.message(wall
       ? "Wall uses applied parameters. Playback reuses placed stones." : shape ? shapeNote : buildNote);
   }
@@ -184,7 +200,7 @@ export class StagePanel {
     if (busy) {
       const selector = (live ? ".actions button, #stage-tabs button, #export-scale"
         : "#parameter-panel input, #parameter-panel select, #parameter-panel button, .actions input, .actions button, #stage-tabs button")
-        + ', #wall-library button, #wall-history, #wall-file';
+        + ', #wall-library button, #wall-history, #wall-file, #export-scale';
       this.disabled = [...document.querySelectorAll(selector)].map(element => [element, element.disabled]);
       for (const [element] of this.disabled) element.disabled = true;
       this.message(message);

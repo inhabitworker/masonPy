@@ -16,7 +16,7 @@ def clipper():
         return importlib.import_module("pyclipper")
     except ImportError as error:
         raise ValueError(
-            "Distortion requires Pyclipper; install project dependencies with python3 -m pip install -e ."
+            "Polygon shaping and 3D bevels require Pyclipper; install project dependencies with python3 -m pip install -e ."
         ) from error
 
 

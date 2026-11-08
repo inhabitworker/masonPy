@@ -232,8 +232,9 @@ class WallRecordTests(unittest.TestCase):
             "/api/load", {"record": data, "source_revision": session.wall_revision}
         )
         self.assertEqual(status, 200)
-        self.assertEqual(loaded["wall"], data["wall"])
-        self.assertEqual(len(loaded["history"]["entries"]), 2)
+        self.assertEqual(loaded["wall"]["width"], data["width"])
+        self.assertEqual(loaded["wall"]["stones"], [])
+        self.assertEqual(len(loaded["history"]["entries"]), 1)
         selected, status = request("/api/history", {"record_id": first})
         self.assertEqual(selected["history"]["active"], first)
         before = session.to_dict()

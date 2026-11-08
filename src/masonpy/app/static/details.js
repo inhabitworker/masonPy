@@ -75,11 +75,11 @@ export class DetailsPanel {
   }
 
   /** Show a downstream stage's own log and inherited description without live-source queries. */
-  renderStage(stage, metadata, snapshot) {
+  renderStage(stage, metadata, snapshot, geometry = null) {
     this.renderAnalysis(null);
     this.prepareEvents(stage);
     this.infoRevision++;
-    this.stageData = { stage, metadata, snapshot };
+    this.stageData = { stage, metadata, snapshot, geometry };
     this.eventList.replaceChildren(...metadata.events.map(message => {
       const item = document.createElement("li");
       item.className = "diagnostic-message";
@@ -222,12 +222,14 @@ export class DetailsPanel {
     const panel = document.querySelector("#info");
     if (panel.hidden) return;
     if (this.stageData) {
-      const { stage, metadata, snapshot } = this.stageData;
+      const { stage, metadata, snapshot, geometry } = this.stageData;
       const id = this.selectedStoneId;
+      const treatment = geometry?.stones?.find(stone => stone.id === id)?.treatment;
       const data = id === null ? { ...metadata, result: snapshot }
         : { stage, current: metadata.current, stone_id: id,
             source: snapshot?.source?.stones.find(stone => stone.id === id),
             contour: snapshot?.stones?.find(stone => stone.id === id),
+            ...(treatment ? { treatment } : {}),
             source_configuration: snapshot?.source_configuration ?? metadata.source_configuration,
             settings: metadata.settings ?? snapshot?.settings ?? { joint_width: snapshot?.joint_width } };
       panel.replaceChildren(this.infoNode(stage, data, stage, true));

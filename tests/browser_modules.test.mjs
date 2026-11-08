@@ -265,6 +265,30 @@ test("binary downloads preserve payload and filename and expose backend validati
 });
 
 const { StagePanel } = await load("stages");
+test("header exports gate SVG by its 2D source and STL independently of the active tab", () => {
+  const original = globalThis.document;
+  globalThis.document = { querySelector: () => ({checkValidity: () => true}) };
+  try {
+    const panel = Object.create(StagePanel.prototype);
+    panel.active = "wall";
+    panel.state = { wall:{stones:[]}, shape:{current:false}, build:{current:false} };
+    assert.match(panel.exportAvailability(panel.svgStage()), /Place or generate/);
+    panel.state.wall.stones.push({});
+    assert.equal(panel.exportAvailability(panel.svgStage()), "");
+    assert.match(panel.exportAvailability("3d"), /Build 3D/);
+    panel.state.shape.current = true;
+    panel.state.build = {current:true,settings:{depth:0.4}};
+    assert.equal(panel.exportAvailability("3d"), "");
+    panel.active = "3d";
+    assert.equal(panel.svgStage(), "shape");
+    assert.equal(panel.exportAvailability(panel.svgStage()), "");
+    panel.state.shape.current = false;
+    assert.match(panel.exportAvailability(panel.svgStage()), /Apply Shape/);
+    panel.pending = true;
+    assert.match(panel.exportAvailability("3d"), /Wait/);
+  } finally { globalThis.document = original; }
+});
+
 test("STL export permits closed core builds while retaining depth and stale-source gates", () => {
   const original = globalThis.document;
   globalThis.document = { querySelector: selector => {
@@ -287,11 +311,11 @@ test("STL export permits closed core builds while retaining depth and stale-sour
 
 test("Shape drafts retain fractional parameters and an independent integer seed", () => {
   const original = globalThis.document;
-  const values = { "#joint-width": "0.125", "#shape-distortion": "0.37", "#shape-seed": "12", "#variation-scale": "4.5" };
+  const values = { "#joint-width": "0.125", "#shape-distortion": "0.37", "#shape-seed": "12", "#variation-scale": "4.5", "#corner-softening":"0.6" };
   globalThis.document = { querySelector: selector => ({ value: values[selector] }) };
   try {
     const panel = Object.create(StagePanel.prototype);
-    assert.deepEqual(panel.payload("shape"), { joint_width: .125, distortion: .37, seed: 12, variation_scale: 4.5 });
+    assert.deepEqual(panel.payload("shape"), { joint_width: .125, distortion: .37, seed: 12, variation_scale: 4.5, corner_softening: .6 });
   } finally { globalThis.document = original; }
 });
 
@@ -452,9 +476,9 @@ test("event following waits for expanded text layout, preserves manual inspectio
 test("fresh 3D controls use shared defaults while applied builds retain their settings", () => {
   const original = globalThis.document;
   const controls = Object.fromEntries(["projection-mode", "projection-roundness", "projection-resolution", "stone-depth",
-    "projection-primitive", "tube-thickness"].map(id => [`#${id}`, { value: "" }]));
+    "projection-primitive", "tube-thickness", "depth-variation", "edge-bevel", "detail-seed"].map(id => [`#${id}`, { value: "" }]));
   globalThis.document = { querySelector: selector => controls[selector] };
-  const defaults = { mode: "projected", roundness: .25, resolution: 8, depth: .25, primitive: "tube", tube_thickness: 1 };
+  const defaults = { mode: "projected", roundness: .25, resolution: 8, depth: .25, primitive: "tube", tube_thickness: 1, depth_variation:0, bevel:0, detail_seed:1 };
   try {
     for (const settings of [null, { ...defaults, mode: "flat", primitive: "none", depth: .5 }]) {
       const panel = Object.create(StagePanel.prototype);
@@ -477,7 +501,7 @@ test("an interrupted binary response reports a retryable export transfer error",
 
 const { StageRefresh } = await load("pipeline");
 const shapeDefaults = { joint_width: .2, distortion: 0, seed: 1, variation_scale: 6 };
-const buildDefaults = { mode: "projected", roundness: .25, resolution: 8, depth: .25, primitive: "tube", tube_thickness: 1 };
+const buildDefaults = { mode: "projected", roundness: .25, resolution: 8, depth: .25, primitive: "tube", tube_thickness: 1, depth_variation:0, bevel:0, detail_seed:1 };
 function sourceState(revision = 1) {
   return { wall_revision: revision, wall: { stones: [{ id: revision }] },
     shape: { revision: 0, current: false, result: null, defaults: { ...shapeDefaults } },
@@ -707,20 +731,23 @@ test("JSON loading captures its source before file reading and rejects bad files
   assert.match(errors.at(-1), /32 MiB/);
 });
 
-test("loading and selecting history restore Wall controls and refresh the active downstream stage", async () => {
+test("config loading restores parameters without processing; history refreshes the inspected stage", async () => {
   for (const action of ["load", "history"]) {
     const app = Object.create(WorkbenchApp.prototype);
     const restored = sourceState(2), calls = [];
     app.state = sourceState(1);
     app.parameters = { parametersAreDirty: () => true, restore: state => calls.push(["controls", state.wall_revision]) };
     app.playback = { cancel() {} };
-    app.stages = { active: "3d", busy: false, setBusy() {}, message() {} };
+    app.stages = { active: "3d", busy: false, setBusy() {}, message() {},
+      restoreConfig: state => calls.push(["stage controls", state.wall_revision]),
+      tabs: {select: stage => calls.push(["tab", stage])} };
     app.api = { post: async path => { calls.push(["request", path]); return restored; } };
     app.accept = async state => { app.state = state; return true; };
     app.updateWallActions = () => {};
     app.refreshStage = async stage => calls.push(["refresh", stage]);
     assert.equal(await app.mutate(action, {}), true);
-    assert.deepEqual(calls, [["request", `/api/${action}`], ["controls", 2], ["refresh", "3d"]]);
+    assert.deepEqual(calls, [["request", `/api/${action}`], ["controls", 2],
+      ...(action === "load" ? [["stage controls", 2], ["tab", "wall"]] : [["refresh", "3d"]])]);
   }
 });
 

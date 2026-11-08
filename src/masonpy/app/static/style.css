@@ -696,3 +696,13 @@ aside > .panel-heading { flex-shrink: 0; }
 #analysis-legend .fallback { background: #5d9cbd; }
 #analysis-legend .deliberate { background: #a486bc; }
 @media (max-width: 560px) { #wall-library { margin-left: 0; width: 100%; } #wall-history { flex: 1; } }
+
+/* Configuration and computed geometry exports share the header. */
+#wall-library { justify-content: flex-end; }
+#wall-history { width: 180px; }
+.header-exports { display: flex; align-items: center; gap: 8px; border-left: 1px solid var(--line); padding-left: 12px; }
+.header-exports .export-scale { margin-left: 2px; }
+@media (max-width: 560px) {
+  #wall-library { justify-content: flex-start; }
+  .header-exports { flex-wrap: wrap; }
+}
