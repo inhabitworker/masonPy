@@ -162,7 +162,7 @@ class DepthBevelTests(unittest.TestCase):
         wall = self.source()
         geometry = WallGeometry(wall, depth=0.4, depth_variation=0.2)
         with patch(
-            "masonpy.exporting.shell_triangles",
+            "masonpy.geometry.validation.shell_triangles",
             side_effect=[ValueError("precision"), None],
         ):
             geometry.stone_mesh(wall.stones[0])

@@ -24,30 +24,6 @@ MAX_BEVEL_TRIANGLES = 12000
 MAX_BUILD_TRIANGLES = 1_000_000
 
 
-def validate_details(depth_variation: float, detail_seed: int, bevel: float) -> None:
-    """Validate geometry-independent controls for both config import and mesh builds."""
-    for name, value, upper in (
-        ("depth variation", depth_variation, 0.9),
-        ("bevel", bevel, math.inf),
-    ):
-        if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or not math.isfinite(value)
-            or not 0 <= value <= upper
-        ):
-            raise ValueError(
-                f"{name} must be finite, non-negative"
-                + (" and at most 0.9" if name == "depth variation" else "")
-            )
-    if (
-        isinstance(detail_seed, bool)
-        or not isinstance(detail_seed, int)
-        or not 0 <= detail_seed <= 2147483647
-    ):
-        raise ValueError("3D detail seed must be an integer from 0 to 2147483647")
-
-
 def inset_ring(stone: ShapedStone, width: float) -> ShapedStone:
     """Inset corresponding vertices, rejecting collapsed miters and folded bands."""
     outer = stone.vertices
@@ -110,7 +86,7 @@ def _clip(points: list, cut: float, keep_right: bool) -> list:
     return result
 
 
-def _face(mesh: SurfaceMesh, geometry: WallGeometry, triangle: list) -> None:
+def _face(mesh: SurfaceMesh, geometry: WallGeometry, triangle: list, role: str) -> None:
     """Score one parameter triangle at mapping facets before projecting it."""
     left, right = min(p[0] for p in triangle), max(p[0] for p in triangle)
     cuts = geometry.splits(left, right - left)
@@ -130,6 +106,7 @@ def _face(mesh: SurfaceMesh, geometry: WallGeometry, triangle: list) -> None:
             index = len(mesh.vertices)
             mesh.vertices.extend(geometry.point(*p) for p in face)
             mesh.triangles.append((index, index + 1, index + 2))
+            mesh.face_roles.append(role)
             if len(mesh.triangles) > MAX_BEVEL_TRIANGLES:
                 raise ValueError("Bevel exceeds the per-stone triangle limit")
 
@@ -141,9 +118,9 @@ def chamfer_mesh(
     inner = inset_ring(stone, width)
     mesh = SurfaceMesh()
     for triangle in triangulate(stone.vertices):
-        _face(mesh, geometry, [(x, y, 0) for x, y in reversed(triangle)])
+        _face(mesh, geometry, [(x, y, 0) for x, y in reversed(triangle)], "back")
     for triangle in triangulate(inner.vertices):
-        _face(mesh, geometry, [(x, y, depth) for x, y in triangle])
+        _face(mesh, geometry, [(x, y, depth) for x, y in triangle], "front")
     shoulder = depth - width
     for i, a in enumerate(stone.vertices):
         j = (i + 1) % len(stone.vertices)
@@ -151,9 +128,12 @@ def chamfer_mesh(
         low_a, low_b = (*a, 0), (*b, 0)
         top_a, top_b = (*a, shoulder), (*b, shoulder)
         front_a, front_b = (*d, depth), (*c, depth)
-        for quad in ((low_a, low_b, top_b, top_a), (top_a, top_b, front_b, front_a)):
-            _face(mesh, geometry, [quad[0], quad[1], quad[2]])
-            _face(mesh, geometry, [quad[0], quad[2], quad[3]])
+        for role, quad in (
+            ("side", (low_a, low_b, top_b, top_a)),
+            ("bevel", (top_a, top_b, front_b, front_a)),
+        ):
+            _face(mesh, geometry, [quad[0], quad[1], quad[2]], role)
+            _face(mesh, geometry, [quad[0], quad[2], quad[3]], role)
         # Draw the silhouette shoulder, keeping triangulation and bevel diagonals hidden.
         cuts = geometry.splits(min(a[0], b[0]), abs(b[0] - a[0]))
         for left, right in zip(cuts, cuts[1:]):

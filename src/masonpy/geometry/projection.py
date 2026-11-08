@@ -13,7 +13,8 @@ from masonpy.processing import ShapedStone, ShapedWall
 from masonpy.processing.contours import EPSILON, clip_x, cross, triangulate
 
 from .mesh import SurfaceMesh
-from .bevel import MAX_BEVEL_VERTICES, MAX_BUILD_TRIANGLES, validate_details
+from .bevel import MAX_BEVEL_VERTICES, MAX_BUILD_TRIANGLES
+from .settings import validate_details
 
 
 class WallGeometry:
@@ -229,7 +230,7 @@ class WallGeometry:
         self, stone: ShapedStone, rectangle: Stone | None = None
     ) -> SurfaceMesh:
         """Validate optional treatments, reducing the bevel or retaining the base shell."""
-        from masonpy.exporting import shell_triangles
+        from .validation import shell_triangles
         from .bevel import chamfer_mesh
 
         depth = self.depth_for(stone.id)
@@ -326,13 +327,13 @@ class WallGeometry:
         for left, right in zip(cuts, cuts[1:]):
             a, b = self.point(left, y0, depth), self.point(right, y0, depth)
             c, d = self.point(right, y1, depth), self.point(left, y1, depth)
-            mesh.quad(a, b, c, d)
+            mesh.quad(a, b, c, d, role="front")
             mesh.edge(a, b)
             mesh.edge(d, c)
             if depth:
                 e, f = self.point(left, y0), self.point(right, y0)
                 g, h = self.point(right, y1), self.point(left, y1)
-                mesh.quad(h, g, f, e)  # back
+                mesh.quad(h, g, f, e, role="back")  # back
                 mesh.quad(e, f, b, a)  # bottom
                 mesh.quad(d, c, g, h)  # top
         # A full ring has no end faces or artificial seam outline.
@@ -378,12 +379,14 @@ class WallGeometry:
                     index = len(mesh.vertices)
                     mesh.vertices.extend(self.point(x, y, depth) for x, y in face)
                     mesh.triangles.append((index, index + 1, index + 2))
+                    mesh.face_roles.append("front")
                     if depth:
                         index = len(mesh.vertices)
                         mesh.vertices.extend(
                             self.point(x, y) for x, y in reversed(face)
                         )
                         mesh.triangles.append((index, index + 1, index + 2))
+                        mesh.face_roles.append("back")
         boundaries = []
         for a, b in zip(points, points[1:] + points[:1]):
             ts = [0.0, 1.0]
@@ -471,10 +474,15 @@ class WallGeometry:
                 mesh.quad(h, g, f, e)
                 mesh.quad(e, f, b, a)
                 mesh.quad(d, c, g, h)
+        mesh.face_roles = ["core"] * len(mesh.triangles)
         return mesh
 
     def to_dict(
-        self, *, primitive: str = "none", tube_thickness: float = 0.5
+        self,
+        *,
+        primitive: str = "none",
+        tube_thickness: float = 0.5,
+        include_roles: bool = False,
     ) -> dict[str, Any]:
         """Return a JSON-ready representation of the current object or snapshot."""
         if self.mode == "projected":
@@ -495,7 +503,9 @@ class WallGeometry:
                 raise ValueError(
                     "3D detail build exceeds one million triangles; reduce mapping resolution or bevel"
                 )
-            stones.append({"id": source.id, **mesh.to_dict()})
+            stones.append(
+                {"id": source.id, **mesh.to_dict(include_roles=include_roles)}
+            )
         result = {
             "mode": self.mode,
             "perimeter": self.wall.width,
@@ -504,7 +514,9 @@ class WallGeometry:
             else "whole stones, planar",
             "section": self.section if self.mode == "projected" else [],
             "stones": stones,
-            "primitive": self.primitive_mesh(primitive, tube_thickness).to_dict(),
+            "primitive": self.primitive_mesh(primitive, tube_thickness).to_dict(
+                include_roles=include_roles
+            ),
         }
         if self.depth_variation or self.bevel:
             records = list(self._treatments.values())

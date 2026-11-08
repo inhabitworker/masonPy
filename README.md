@@ -4,7 +4,10 @@ A procedural masonry library on an integer grid, with a lightweight local browse
 workbench. The logical core has no Blender or GUI dependencies. Shape uses the small
 Pyclipper polygon-offset library; there are no numerical-array or UI-framework
 dependencies.
-A Blender add-on is a future destination, not a current requirement.
+The [Blender extension](blender/README.md) adds labelled mapped surfaces or
+extruded stones through Add → Mesh → Masonry, with saved settings and explicit
+regeneration. Its self-contained ZIP bundles Pyclipper for Blender 5.1 on macOS
+Apple Silicon; no dependency installation is performed at startup.
 
 ## Run
 
@@ -230,11 +233,19 @@ mm/unit alone scales the print without changing the layout.
 - `generators/`: incremental interface, events, catalogue, `brick.py`, `ashlar.py`.
 - `analysis/`: skyline, joint runs, local queries and descriptive statistics.
 - `processing/`: inherited descriptions, periodic shared topology, fields, validation and inset.
-- `geometry/`: polygon triangulation/projection, extrusion and mesh buffers.
+- `geometry/`: projection, extrusion, detail settings, surface buffers and float32 shell validation.
+- `configuration.py`: shared recipe validation and defaults for application adapters.
 - `records.py`: isolated exact snapshots and continuation state for session history.
 - `exporting.py`: clean SVG and validated binary STL attachments.
 - `app/`: optional session, stdlib HTTP server and component-based browser UI.
 - `diagnostics.py`: reproducible Ashlar quality battery and HTML/SVG/JSON reports.
+- `blender/masonpy_blender/`: Blender operators, saved recipes, labelled mesh conversion and UI.
+- `tools/`: self-contained Blender extension packaging and isolated installation tests.
+
+Surface buffers use grid units with Y up and may repeat vertices between faces.
+They retain separate stone IDs and optionally expose semantic triangle roles.
+The Blender adapter converts them to connected per-stone mesh islands; shared
+geometry does not depend on file exporters or a host API.
 
 Public library imports remain available from `masonpy`. The local launcher is
 now `python -m masonpy.app`; browser modules start in `app/static/startup.js`.

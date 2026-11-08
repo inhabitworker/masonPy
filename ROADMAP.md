@@ -160,10 +160,16 @@ These are face-layout diagnostics, not structural masonry calculations.
 
 ## Blender and longer-term workflow
 
-- [ ] Design a thin Blender adapter over the independent Python core. Preserve
-  stone IDs, source settings and stage boundaries. Where appropriate, translate
-  depth, bevels, subdivision and displacement into Blender modifiers instead of
-  duplicating a full modifier system in the browser.
+- [x] Extract shared recipe validation/defaults from the browser app, move shell
+  checks into geometry, and reserve Blender adapter source. See
+  [the adapter boundary](blender/README.md) for topology and dependency constraints.
+- [x] Add a thin Blender adapter over the independent Python core: Add Masonry,
+  saved recipes, explicit regeneration, mapped 2D or extruded output, connected
+  stone islands, semantic face attributes/groups and optional separate backing.
+  Package a self-contained Blender 5.1/macOS Apple Silicon ZIP with Pyclipper.
+- [ ] Add Blender modifier integration using preserved stone IDs and face roles.
+  Consider native bevels, subdivision and displacement before duplicating a full
+  modifier system in the browser.
 - [ ] Consider complete project snapshots, including generated geometry and
   placement evidence, once a concrete workflow needs them. Current config JSON
   stores Wall/Shape/3D parameters; exact

@@ -1,0 +1,16 @@
+schema_version = "1.0.0"
+id = "masonpy_blender"
+version = "0.1.0"
+name = "MasonPy Masonry"
+tagline = "Generate labelled masonry surfaces and solids from saved recipes"
+maintainer = "Lyle"
+type = "add-on"
+tags = ["Add Mesh"]
+blender_version_min = "5.1.0"
+blender_version_max = "5.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+platforms = ["macos-arm64"]
+wheels = [
+  "./wheels/masonpy-0.1.0-py3-none-any.whl",
+  "./wheels/pyclipper-1.4.0-cp313-cp313-macosx_10_13_universal2.whl",
+]

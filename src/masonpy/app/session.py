@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from typing import Any, Iterator
 
+from masonpy.configuration import DEFAULT_WALL_SETTINGS
 from masonpy.analysis import WallAnalysis
 from masonpy.generators import (
     GENERATOR_DEFINITIONS,
@@ -21,9 +22,9 @@ class GenerationSession:
     def __init__(
         self,
         *,
-        width: int = 104,
-        height: int = 60,
-        generator_id: str = "running_bond",
+        width: int = DEFAULT_WALL_SETTINGS["width"],
+        height: int = DEFAULT_WALL_SETTINGS["height"],
+        generator_id: str = DEFAULT_WALL_SETTINGS["generator"],
         generator_parameters: dict[str, Any] | None = None,
     ) -> None:
         """Create the default or supplied workbench configuration and its re-entrant session lock."""
@@ -40,7 +41,7 @@ class GenerationSession:
         *,
         width: int,
         height: int,
-        generator_id: str = "running_bond",
+        generator_id: str = DEFAULT_WALL_SETTINGS["generator"],
         generator_parameters: dict[str, Any] | None = None,
     ) -> None:
         """Create a fresh wall, generator and iterator, clearing history and terminal failure."""

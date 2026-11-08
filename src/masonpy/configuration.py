@@ -7,15 +7,47 @@ import math
 from typing import Any
 
 from masonpy.generators.catalog import get_generator_definition
-from masonpy.geometry.bevel import validate_details
+from masonpy.geometry.settings import validate_details
 from masonpy.processing import ShapeSettings
 from masonpy.records import MAX_RECORD_CELLS
 
 
+DEFAULT_WALL_SETTINGS = {"generator": "running_bond", "width": 104, "height": 60}
+
+
+DEFAULT_SHAPE_SETTINGS = {
+    "joint_width": 0.2,
+    "distortion": 0,
+    "seed": 1,
+    "variation_scale": 6,
+    "corner_softening": 0,
+}
+
+DEFAULT_BUILD_SETTINGS = {
+    "mode": "projected",
+    "roundness": 0.25,
+    "resolution": 8,
+    "depth": 0.25,
+    "primitive": "tube",
+    "tube_thickness": 1,
+    "depth_variation": 0,
+    "detail_seed": 1,
+    "bevel": 0,
+}
+
+
 def configuration(
-    data: Any, shape_defaults: dict[str, Any], build_defaults: dict[str, Any]
+    data: Any,
+    shape_defaults: dict[str, Any] | None = None,
+    build_defaults: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve a recipe or extract parameters from a legacy specimen, without generating."""
+    shape_defaults = (
+        DEFAULT_SHAPE_SETTINGS if shape_defaults is None else shape_defaults
+    )
+    build_defaults = (
+        DEFAULT_BUILD_SETTINGS if build_defaults is None else build_defaults
+    )
     if not isinstance(data, dict):
         raise ValueError("Config JSON must be an object")
     try:

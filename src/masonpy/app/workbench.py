@@ -7,6 +7,11 @@ import json
 from time import perf_counter
 from typing import Any
 
+from masonpy.configuration import (
+    DEFAULT_BUILD_SETTINGS,
+    DEFAULT_SHAPE_SETTINGS,
+    configuration,
+)
 from masonpy.exporting import mesh_stl, wall_svg
 from masonpy.geometry import WallGeometry
 from masonpy.generators import GenerationEvent
@@ -20,27 +25,6 @@ from masonpy.processing import (
 )
 
 from .session import GenerationSession
-from .configuration import configuration
-
-DEFAULT_SHAPE_SETTINGS = {
-    "joint_width": 0.2,
-    "distortion": 0,
-    "seed": 1,
-    "variation_scale": 6,
-    "corner_softening": 0,
-}
-
-DEFAULT_BUILD_SETTINGS = {
-    "mode": "projected",
-    "roundness": 0.25,
-    "resolution": 8,
-    "depth": 0.25,
-    "primitive": "tube",
-    "tube_thickness": 1,
-    "depth_variation": 0,
-    "detail_seed": 1,
-    "bevel": 0,
-}
 
 
 class WorkbenchSession(GenerationSession):
@@ -73,7 +57,7 @@ class WorkbenchSession(GenerationSession):
 
     def load_config(self, data: Any, *, source_revision: int | None = None) -> None:
         """Apply validated parameters atomically, leaving an empty wall for explicit generation."""
-        config = configuration(data, DEFAULT_SHAPE_SETTINGS, DEFAULT_BUILD_SETTINGS)
+        config = configuration(data)
         with self._lock:
             self._check_source_revision(source_revision, self.wall_revision, "Wall")
             self.reset(
@@ -106,7 +90,7 @@ class WorkbenchSession(GenerationSession):
                     if self.build_current
                     else self.build_defaults,
                 )
-            config = configuration(data, DEFAULT_SHAPE_SETTINGS, DEFAULT_BUILD_SETTINGS)
+            config = configuration(data)
             return json.dumps(config, indent=2).encode(), "masonpy-config.json"
 
     def reset(self, **kwargs: Any) -> None:
